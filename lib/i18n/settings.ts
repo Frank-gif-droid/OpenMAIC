@@ -533,6 +533,17 @@ export const settingsZhCN = {
     setupNeeded: '请先完成配置',
     modelNotConfigured: '请选择一个模型以开始使用',
     // Clear cache
+    backupData: '数据备份与迁移',
+    backupDataDescription:
+      '导出当前浏览器中的全部课堂数据（含音频/图片/视频），并可在另一台电脑浏览器导入恢复。',
+    exportBackup: '导出备份',
+    importBackup: '导入备份',
+    backupImportConfirm:
+      '导入将覆盖当前浏览器中的本地数据。请确认你已备份现有数据，是否继续？',
+    backupExportSuccess: '备份导出成功',
+    backupExportFailed: '备份导出失败，请重试',
+    backupImportSuccess: '备份导入成功，页面即将刷新',
+    backupImportFailed: '备份导入失败，请检查文件格式',
     dangerZone: '危险区域',
     clearCache: '清空本地缓存',
     clearCacheDescription:
@@ -1127,6 +1138,17 @@ export const settingsEnUS = {
     setupNeeded: 'Setup required',
     modelNotConfigured: 'Please select a model to get started',
     // Clear cache
+    backupData: 'Data Backup & Migration',
+    backupDataDescription:
+      'Export all classroom data in this browser (including audio/images/videos), then import on another computer/browser.',
+    exportBackup: 'Export Backup',
+    importBackup: 'Import Backup',
+    backupImportConfirm:
+      'Import will overwrite local data in this browser. Please make sure your current data is backed up. Continue?',
+    backupExportSuccess: 'Backup exported successfully',
+    backupExportFailed: 'Failed to export backup. Please try again.',
+    backupImportSuccess: 'Backup imported successfully. The page will refresh shortly.',
+    backupImportFailed: 'Failed to import backup. Please verify the file format.',
     dangerZone: 'Danger Zone',
     clearCache: 'Clear Local Cache',
     clearCacheDescription:

@@ -167,6 +167,42 @@ export interface GeneratedAgentRecord {
   createdAt: number;
 }
 
+/**
+ * JSON-safe blob payload for cross-browser backup files
+ */
+export interface SerializedBlob {
+  mimeType: string;
+  base64: string;
+}
+
+export interface PortableAudioFileRecord extends Omit<AudioFileRecord, 'blob'> {
+  blob: SerializedBlob;
+}
+
+export interface PortableImageFileRecord extends Omit<ImageFileRecord, 'blob'> {
+  blob: SerializedBlob;
+}
+
+export interface PortableMediaFileRecord extends Omit<MediaFileRecord, 'blob' | 'poster'> {
+  blob: SerializedBlob;
+  poster?: SerializedBlob;
+}
+
+export interface PortableDatabaseBackup {
+  version: 1;
+  exportedAt: number;
+  stages: StageRecord[];
+  scenes: SceneRecord[];
+  audioFiles: PortableAudioFileRecord[];
+  imageFiles: PortableImageFileRecord[];
+  snapshots: Snapshot[];
+  chatSessions: ChatSessionRecord[];
+  playbackState: PlaybackStateRecord[];
+  stageOutlines: StageOutlinesRecord[];
+  mediaFiles: PortableMediaFileRecord[];
+  generatedAgents: GeneratedAgentRecord[];
+}
+
 /** Build the compound primary key for mediaFiles: `${stageId}:${elementId}` */
 export function mediaFileKey(stageId: string, elementId: string): string {
   return `${stageId}:${elementId}`;
@@ -343,43 +379,199 @@ export async function clearDatabase(): Promise<void> {
   log.info('Database cleared');
 }
 
+async function blobToSerializedBlob(blob: Blob): Promise<SerializedBlob> {
+  const buffer = await blob.arrayBuffer();
+  let binary = '';
+  const bytes = new Uint8Array(buffer);
+  const chunkSize = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    const chunk = bytes.subarray(i, i + chunkSize);
+    binary += String.fromCharCode(...chunk);
+  }
+  return {
+    mimeType: blob.type || 'application/octet-stream',
+    base64: btoa(binary),
+  };
+}
+
+function serializedBlobToBlob(payload: SerializedBlob): Blob {
+  const binary = atob(payload.base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return new Blob([bytes], { type: payload.mimeType });
+}
+
 /**
- * Export database contents (for backup)
+ * Export database contents (raw Dexie records)
+ * Note: Blob fields stay as Blob. For cross-browser JSON backup, use exportPortableDatabase().
  */
 export async function exportDatabase(): Promise<{
   stages: StageRecord[];
   scenes: SceneRecord[];
+  audioFiles: AudioFileRecord[];
+  imageFiles: ImageFileRecord[];
+  snapshots: Snapshot[];
   chatSessions: ChatSessionRecord[];
   playbackState: PlaybackStateRecord[];
+  stageOutlines: StageOutlinesRecord[];
+  mediaFiles: MediaFileRecord[];
+  generatedAgents: GeneratedAgentRecord[];
 }> {
   return {
     stages: await db.stages.toArray(),
     scenes: await db.scenes.toArray(),
+    audioFiles: await db.audioFiles.toArray(),
+    imageFiles: await db.imageFiles.toArray(),
+    snapshots: await db.snapshots.toArray(),
     chatSessions: await db.chatSessions.toArray(),
     playbackState: await db.playbackState.toArray(),
+    stageOutlines: await db.stageOutlines.toArray(),
+    mediaFiles: await db.mediaFiles.toArray(),
+    generatedAgents: await db.generatedAgents.toArray(),
   };
 }
 
 /**
- * Import database contents (for restoring backups)
+ * Import database contents (raw Dexie records)
+ * Pair with exportDatabase(). For portable JSON backup, use importPortableDatabase().
  */
 export async function importDatabase(data: {
   stages?: StageRecord[];
   scenes?: SceneRecord[];
+  audioFiles?: AudioFileRecord[];
+  imageFiles?: ImageFileRecord[];
+  snapshots?: Snapshot[];
   chatSessions?: ChatSessionRecord[];
   playbackState?: PlaybackStateRecord[];
+  stageOutlines?: StageOutlinesRecord[];
+  mediaFiles?: MediaFileRecord[];
+  generatedAgents?: GeneratedAgentRecord[];
 }): Promise<void> {
   await db.transaction(
     'rw',
-    [db.stages, db.scenes, db.chatSessions, db.playbackState],
+    [
+      db.stages,
+      db.scenes,
+      db.audioFiles,
+      db.imageFiles,
+      db.snapshots,
+      db.chatSessions,
+      db.playbackState,
+      db.stageOutlines,
+      db.mediaFiles,
+      db.generatedAgents,
+    ],
     async () => {
       if (data.stages) await db.stages.bulkPut(data.stages);
       if (data.scenes) await db.scenes.bulkPut(data.scenes);
+      if (data.audioFiles) await db.audioFiles.bulkPut(data.audioFiles);
+      if (data.imageFiles) await db.imageFiles.bulkPut(data.imageFiles);
+      if (data.snapshots) await db.snapshots.bulkPut(data.snapshots);
       if (data.chatSessions) await db.chatSessions.bulkPut(data.chatSessions);
       if (data.playbackState) await db.playbackState.bulkPut(data.playbackState);
+      if (data.stageOutlines) await db.stageOutlines.bulkPut(data.stageOutlines);
+      if (data.mediaFiles) await db.mediaFiles.bulkPut(data.mediaFiles);
+      if (data.generatedAgents) await db.generatedAgents.bulkPut(data.generatedAgents);
     },
   );
   log.info('Database imported successfully');
+}
+
+/**
+ * Export a fully portable JSON-safe backup (including binary blobs).
+ * The output can be JSON-stringified and restored on another browser/computer.
+ */
+export async function exportPortableDatabase(): Promise<PortableDatabaseBackup> {
+  const [rawAudioFiles, rawImageFiles, rawMediaFiles]: [
+    AudioFileRecord[],
+    ImageFileRecord[],
+    MediaFileRecord[],
+  ] = await Promise.all([
+    db.audioFiles.toArray(),
+    db.imageFiles.toArray(),
+    db.mediaFiles.toArray(),
+  ]);
+
+  const [audioFiles, imageFiles, mediaFiles] = await Promise.all([
+    Promise.all(
+      rawAudioFiles.map(async (record: AudioFileRecord): Promise<PortableAudioFileRecord> => ({
+        ...record,
+        blob: await blobToSerializedBlob(record.blob),
+      })),
+    ),
+    Promise.all(
+      rawImageFiles.map(async (record: ImageFileRecord): Promise<PortableImageFileRecord> => ({
+        ...record,
+        blob: await blobToSerializedBlob(record.blob),
+      })),
+    ),
+    Promise.all(
+      rawMediaFiles.map(async (record: MediaFileRecord): Promise<PortableMediaFileRecord> => {
+        const { poster, ...rest } = record;
+        return {
+          ...rest,
+          blob: await blobToSerializedBlob(record.blob),
+          ...(poster ? { poster: await blobToSerializedBlob(poster) } : {}),
+        };
+      }),
+    ),
+  ]);
+
+  return {
+    version: 1,
+    exportedAt: Date.now(),
+    stages: await db.stages.toArray(),
+    scenes: await db.scenes.toArray(),
+    audioFiles,
+    imageFiles,
+    snapshots: await db.snapshots.toArray(),
+    chatSessions: await db.chatSessions.toArray(),
+    playbackState: await db.playbackState.toArray(),
+    stageOutlines: await db.stageOutlines.toArray(),
+    mediaFiles,
+    generatedAgents: await db.generatedAgents.toArray(),
+  };
+}
+
+/**
+ * Import a portable JSON-safe backup generated by exportPortableDatabase().
+ */
+export async function importPortableDatabase(data: PortableDatabaseBackup): Promise<void> {
+  if (data.version !== 1) {
+    throw new Error(`Unsupported portable backup version: ${data.version}`);
+  }
+
+  const audioFiles: AudioFileRecord[] = data.audioFiles.map((record) => ({
+    ...record,
+    blob: serializedBlobToBlob(record.blob),
+  }));
+  const imageFiles: ImageFileRecord[] = data.imageFiles.map((record) => ({
+    ...record,
+    blob: serializedBlobToBlob(record.blob),
+  }));
+  const mediaFiles: MediaFileRecord[] = data.mediaFiles.map((record) => {
+    const { poster, ...rest } = record;
+    return {
+      ...rest,
+      blob: serializedBlobToBlob(record.blob),
+      ...(poster ? { poster: serializedBlobToBlob(poster) } : {}),
+    };
+  });
+
+  await importDatabase({
+    stages: data.stages,
+    scenes: data.scenes,
+    audioFiles,
+    imageFiles,
+    snapshots: data.snapshots,
+    chatSessions: data.chatSessions,
+    playbackState: data.playbackState,
+    stageOutlines: data.stageOutlines,
+    mediaFiles,
+    generatedAgents: data.generatedAgents,
+  });
 }
 
 // ==================== Convenience Query Functions ====================

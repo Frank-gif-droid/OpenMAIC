@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useRef, type ChangeEvent } from 'react';
 import { Label } from '@/components/ui/label';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
@@ -13,9 +13,15 @@ import {
   AlertDialogFooter,
   AlertDialogCancel,
 } from '@/components/ui/alert-dialog';
-import { Loader2, Trash2, AlertTriangle } from 'lucide-react';
+import { Loader2, Trash2, AlertTriangle, Download, Upload } from 'lucide-react';
 import { useI18n } from '@/lib/hooks/use-i18n';
-import { clearDatabase } from '@/lib/utils/database';
+import {
+  clearDatabase,
+  exportPortableDatabase,
+  importPortableDatabase,
+  initDatabase,
+  type PortableDatabaseBackup,
+} from '@/lib/utils/database';
 import { toast } from 'sonner';
 import { createLogger } from '@/lib/logger';
 
@@ -28,6 +34,9 @@ export function GeneralSettings() {
   const [showClearDialog, setShowClearDialog] = useState(false);
   const [confirmInput, setConfirmInput] = useState('');
   const [clearing, setClearing] = useState(false);
+  const [exporting, setExporting] = useState(false);
+  const [importing, setImporting] = useState(false);
+  const importInputRef = useRef<HTMLInputElement>(null);
 
   const confirmPhrase = t('settings.clearCacheConfirmPhrase');
   const isConfirmValid = confirmInput === confirmPhrase;
@@ -61,8 +70,138 @@ export function GeneralSettings() {
       ? t('settings.clearCacheConfirmItems').split('、')
       : t('settings.clearCacheConfirmItems').split(', ');
 
+  const handleExportBackup = useCallback(async () => {
+    setExporting(true);
+    try {
+      const backup = await exportPortableDatabase();
+      const localStorageSnapshot: Record<string, string> = {};
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (!key) continue;
+        localStorageSnapshot[key] = localStorage.getItem(key) ?? '';
+      }
+      const payload = {
+        format: 'openmaic-portable-backup-v1' as const,
+        db: backup,
+        localStorage: localStorageSnapshot,
+      };
+      const blob = new Blob([JSON.stringify(payload)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `openmaic-backup-${Date.now()}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+      toast.success(t('settings.backupExportSuccess'));
+    } catch (error) {
+      log.error('Failed to export backup:', error);
+      toast.error(t('settings.backupExportFailed'));
+    } finally {
+      setExporting(false);
+    }
+  }, [t]);
+
+  const handleImportBackupFile = useCallback(
+    async (event: ChangeEvent<HTMLInputElement>) => {
+      const file = event.target.files?.[0];
+      event.target.value = '';
+      if (!file) return;
+
+      const confirmed = window.confirm(t('settings.backupImportConfirm'));
+      if (!confirmed) return;
+
+      setImporting(true);
+      try {
+        const text = await file.text();
+        const parsed = JSON.parse(text) as
+          | PortableDatabaseBackup
+          | {
+              format?: string;
+              db?: PortableDatabaseBackup;
+              localStorage?: Record<string, string>;
+            };
+        const backup =
+          typeof parsed === 'object' &&
+          parsed !== null &&
+          'format' in parsed &&
+          parsed.format === 'openmaic-portable-backup-v1' &&
+          parsed.db
+            ? parsed.db
+            : (parsed as PortableDatabaseBackup);
+
+        await clearDatabase();
+        await initDatabase();
+        await importPortableDatabase(backup);
+        if (
+          typeof parsed === 'object' &&
+          parsed !== null &&
+          'format' in parsed &&
+          parsed.format === 'openmaic-portable-backup-v1'
+        ) {
+          localStorage.clear();
+          const storage = parsed.localStorage ?? {};
+          for (const [key, value] of Object.entries(storage)) {
+            localStorage.setItem(key, value);
+          }
+        }
+        toast.success(t('settings.backupImportSuccess'));
+        setTimeout(() => {
+          window.location.reload();
+        }, 1000);
+      } catch (error) {
+        log.error('Failed to import backup:', error);
+        toast.error(t('settings.backupImportFailed'));
+      } finally {
+        setImporting(false);
+      }
+    },
+    [t],
+  );
+
   return (
     <div className="flex flex-col gap-8">
+      <input
+        ref={importInputRef}
+        type="file"
+        accept="application/json,.json"
+        className="hidden"
+        onChange={handleImportBackupFile}
+      />
+
+      <div className="rounded-xl border border-border bg-card p-4 space-y-4">
+        <div className="flex items-center justify-between gap-4">
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-medium">{t('settings.backupData')}</p>
+            <p className="text-xs text-muted-foreground mt-0.5 leading-relaxed">
+              {t('settings.backupDataDescription')}
+            </p>
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            <Button size="sm" variant="outline" onClick={handleExportBackup} disabled={exporting}>
+              {exporting ? (
+                <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />
+              ) : (
+                <Download className="w-3.5 h-3.5 mr-1.5" />
+              )}
+              {t('settings.exportBackup')}
+            </Button>
+            <Button
+              size="sm"
+              onClick={() => importInputRef.current?.click()}
+              disabled={importing}
+              variant="secondary"
+            >
+              {importing ? (
+                <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />
+              ) : (
+                <Upload className="w-3.5 h-3.5 mr-1.5" />
+              )}
+              {t('settings.importBackup')}
+            </Button>
+          </div>
+        </div>
+      </div>
+
       {/* Danger Zone - Clear Cache */}
       <div className="relative rounded-xl border border-destructive/30 bg-destructive/[0.03] dark:bg-destructive/[0.06] overflow-hidden">
         {/* Subtle diagonal stripe pattern for danger emphasis */}
